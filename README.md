@@ -12,7 +12,7 @@
 3. [Étape 1 — Installation d'Objection](#3-étape-1--installation-dobjection)
 4. [Étape 2 — Préparer l'appareil et démarrer frida-server](#4-étape-2--préparer-lappareil-et-démarrer-frida-server)
 5. [Étape 3 — Configurer le proxy et installer la CA](#5-étape-3--configurer-le-proxy-et-installer-la-ca)
-6. [Étape 4 — Lancer l'app avec Objection](#6-étape-4--lancer-lapp-avec-objection)
+6. [Étape 4 — Lancer l'app avec Objection (théorie)](#6-étape-4--lancer-lapp-avec-objection-théorie)
 7. [Étape 5 — Validation](#7-étape-5--validation)
 8. [ERREURS RENCONTRÉES — Diagnostic complet](#8-erreurs-rencontrées--diagnostic-complet)
 9. [Solution de contournement — Frida JS direct](#9-solution-de-contournement--frida-js-direct)
@@ -36,24 +36,22 @@ Ce lab introduit **Objection**, un outil de haut niveau basé sur Frida qui auto
 
 ## 2. Prérequis — Environnement déjà en place
 
-L'infrastructure suivante est héritée du Lab 15 et déjà opérationnelle :
+![Vérification environnement Python/ADB](swappy-20260523-164049.png)
 
-![Vérification environnement Python/ADB](lab16_ref_env_check.png)
+Avant de commencer, l'environnement de base est vérifié :
+- **Python 3.14.5**, **pip 26.1.1**, **ADB 1.0.41** installés sur l'hôte Arch Linux
+- Émulateur AVD **x86_64** (emulator-5554) connecté via ADB
 
-- Python 3.14.5, pip 26.1.1, ADB 1.0.41 installés sur l'hôte
-- Émulateur AVD x86_64 (emulator-5554) connecté via ADB
+![Frida 17.9.10 installé](swappy-20260523-164123.png)
 
-![Frida 17.9.10 installé](lab16_ref_frida_version.png)
-
-- Frida 17.9.10 installé sur l'hôte (via pip)
-- Certificat CA ZAP installé comme CA système sur l'émulateur
-- Proxy `10.0.2.2:8080` configuré sur l'émulateur
+- **Frida 17.9.10** installé sur l'hôte (client et module Python identiques)
+- Infrastructure héritée du Lab 15 : certificat CA ZAP en CA système, proxy `10.0.2.2:8080` configuré
 
 ---
 
 ## 3. Étape 1 — Installation d'Objection
 
-![Étape 1 — Installation Objection](lab16_step1_objection_install.png)
+![Étape 1 — Instructions installation Objection](lab16_step1_objection_install.png)
 
 Objection s'installe via pipx (environnement isolé recommandé) ou pip classique :
 
@@ -72,24 +70,24 @@ frida --version
 python -c "import frida; print(frida.__version__)"
 ```
 
-> **Remarque :** Sur Arch Linux, `objection --version` n'est pas une option valide dans Objection 1.12.4 — utiliser `objection version` à la place.
+> **Remarque :** Sur Arch Linux avec Objection 1.12.4, `objection --version` retourne une erreur. Utiliser `objection version` à la place.
 
 ---
 
 ## 4. Étape 2 — Préparer l'appareil et démarrer frida-server
 
-![Étape 2 — Préparation frida-server](lab16_step2_frida_server_setup.png)
+![Étape 2 — Instructions préparation frida-server](lab16_step2_frida_server_setup.png)
 
 ```bash
-# Identifier l'architecture
-adb shell getprop ro.product.cpu.abi   # → x86_64
+# Identifier l'architecture (déjà fait en Lab 15 : x86_64)
+adb shell getprop ro.product.cpu.abi
 
 # Pousser et lancer frida-server
 adb push frida-server /data/local/tmp/
 adb shell chmod 755 /data/local/tmp/frida-server
 adb shell "/data/local/tmp/frida-server -l 0.0.0.0" &
 
-# Redirection ports Frida (si nécessaire)
+# Redirection ports Frida
 adb forward tcp:27042 tcp:27042
 adb forward tcp:27043 tcp:27043
 
@@ -97,27 +95,59 @@ adb forward tcp:27043 tcp:27043
 frida-ps -Uai
 ```
 
-> **Important :** La version de `frida-server` doit correspondre exactement à la version du client Frida sur l'hôte (`frida --version`).
+![Push frida-server et vérification ADB](swappy-20260524-142324.png)
+
+> **Important :** La version de `frida-server` doit correspondre **exactement** à la version du client Frida sur l'hôte.
+
+![Ports forwarded et frida-ps confirmé](swappy-20260524-142504.png)
+
+`frida-ps -Uai` liste correctement tous les processus — frida-server est bien actif. Les apps cibles `owasp.mstg.uncrackable1` et `com.pwnsec.snake` sont visibles.
 
 ---
 
 ## 5. Étape 3 — Configurer le proxy et installer la CA
 
-![Étape 3 — Proxy et CA](lab16_step3_proxy_ca.png)
+![ZAP — Local Servers/Proxies port 8080](swappy-20260524-144934.png)
 
-La configuration du proxy ZAP et l'installation du certificat CA sont identiques au Lab 15 (déjà effectuées) :
+ZAP est configuré sur `localhost:8080`. L'émulateur utilisera `10.0.2.2:8080` pour atteindre l'hôte.
 
-- ZAP écoute sur `localhost:8080`
-- Certificat CA ZAP installé dans `/system/etc/security/cacerts/` (hash `44351ca1.0`)
-- Proxy émulateur configuré : `adb shell settings put global http_proxy 10.0.2.2:8080`
+![ZAP — Server Certificates, certificat PEM](swappy-20260524-145046.png)
 
-> **Note importante :** Le bypass SSL pinning via Objection/Frida neutralise la vérification côté application. Le certificat CA système est nécessaire pour que ZAP puisse déchiffrer le trafic sans erreurs côté proxy.
+Le certificat Root CA ZAP est exporté depuis **Tools → Options → Network → Server Certificates → Save**.
+
+![Conversion PEM et calcul hash openssl](swappy-20260524-145814.png)
+
+```bash
+cp zap_root_ca.cer zap_ca.pem
+HASH=$(openssl x509 -inform PEM -subject_hash_old -in zap_ca.pem | head -1)
+echo $HASH   # → 44351ca1
+cp zap_ca.pem ${HASH}.0
+```
+
+![adb root, adb remount, push certificat](swappy-20260524-150813.png)
+
+```bash
+adb root
+adb remount
+adb push 44351ca1.0 /system/etc/security/cacerts/
+adb shell chmod 644 /system/etc/security/cacerts/44351ca1.0
+adb reboot
+```
+
+![chmod et reboot](swappy-20260524-150855.png)
+
+![Vérification certificat installé + proxy configuré](swappy-20260524-151108.png)
+
+```bash
+adb shell ls /system/etc/security/cacerts/ | grep 44351ca1  # → 44351ca1.0 ✓
+adb shell settings put global http_proxy 10.0.2.2:8080
+```
 
 ---
 
 ## 6. Étape 4 — Lancer l'app avec Objection (théorie)
 
-![Étape 4 — Lancement Objection](lab16_step4_objection_launch.png)
+![Étape 4 — Instructions lancement Objection](lab16_step4_objection_launch.png)
 
 La commande théorique pour bypasser le SSL pinning avec Objection :
 
@@ -125,16 +155,13 @@ La commande théorique pour bypasser le SSL pinning avec Objection :
 # Spawn (injection au démarrage — recommandé)
 objection -g com.example.app explore --startup-command "android sslpinning disable"
 
-# Ou attach (app déjà ouverte)
-objection -g com.example.app explore
-# puis dans la console Objection :
-android sslpinning disable
-android root disable   # pour neutraliser la détection root
-```
+# Nouvelle syntaxe (Objection 1.12.4+)
+objection -n com.example.app start --startup-command "android sslpinning disable"
 
-**Commandes utiles dans la console Objection :**
-- `help android sslpinning` — aide sur le pinning
-- `android hooking search classes pin` — recherche de classes liées au pinning
+# Ou attach (app déjà ouverte), puis dans la console :
+android sslpinning disable
+android root disable
+```
 
 > ⚠️ **En pratique, ces commandes ont échoué** — voir section [Erreurs](#8-erreurs-rencontrées--diagnostic-complet).
 
@@ -142,103 +169,81 @@ android root disable   # pour neutraliser la détection root
 
 ## 7. Étape 5 — Validation (théorie)
 
-![Étape 5 — Validation](lab16_step5_validation.png)
+![Étape 5 — Instructions validation](lab16_step5_validation.png)
 
-Une fois le bypass actif, la validation consiste à :
+Une fois le bypass actif :
+1. Générer du trafic depuis l'app (login, navigation, requêtes API)
+2. Vérifier dans ZAP que les requêtes HTTPS apparaissent sans alerte SSL
+3. Surveiller la console Objection pour confirmer les hooks déclenchés
 
-1. Utiliser les écrans internes de l'app (login, requêtes API) pour générer du trafic
-2. Vérifier dans ZAP que les requêtes HTTPS de l'app apparaissent sans alerte SSL
-3. Surveiller la console Objection pour confirmer que les hooks sont déclenchés
+![ZAP intercepte du trafic HTTP](swappy-20260524-151308.png)
 
-**Livrables attendus :**
-- Capture de `objection version`, `frida --version`, `frida-ps -Uai`
-- Commande exacte de lancement (`--startup-command` ou attach)
-- Capture du proxy montrant une requête HTTPS de l'app
+ZAP intercepte correctement du trafic depuis l'émulateur — `update.googleapis.com` et `clients2.google.com` visibles en HTTP.
+
+![Chrome HSTS — connexion non privée](swappy-20260524-151152.png)
+
+Chrome bloque les sites HSTS (google.com) même avec la CA système installée — comportement normal et attendu.
+
+![Chrome HSTS — détail HSTS](swappy-20260524-151209.png)
+
+Le message confirme que le blocage est dû à HSTS préchargé dans Chrome, pas à un problème de proxy.
+
+![Test HTTP avec testphp.vulnweb.com](swappy-20260524-151400.png)
+
+Test avec un site HTTP non-HSTS pour confirmer le routage proxy.
 
 ---
 
 ## 8. ERREURS RENCONTRÉES — Diagnostic complet
 
-### Erreur 1 — Syntaxe dépréciée d'Objection
+### Erreur 1 — Syntaxe dépréciée + Frida server not running
 
-![Erreur 1 — Frida server not running](lab16_err1_objection_frida_not_running.png)
+![Objection --help et Frida version 17.9.10](swappy-20260524-155836.png)
 
-**Commande utilisée :**
+**Diagnostic initial :**
+- `objection --help` → Objection 1.12.4 installé, syntaxe `-g`/`explore` dépréciée
+- `frida --version` → 17.9.10
+
 ```bash
+# Première tentative (ancienne syntaxe)
 objection -g owasp.mstg.uncrackable1 explore --startup-command "android sslpinning disable"
-```
+# → DeprecationWarning: -g deprecated, use -n
+# → DeprecationWarning: explore deprecated, use start
+# → Frida server or gadget is not running on the target!
 
-**Erreur obtenue :**
-```
-DeprecationWarning: The option 'gadget' is deprecated. Please use '-n' or '--name' instead
-DeprecationWarning: The command 'explore' is deprecated. Use 'objection start' instead
-Frida server or gadget is not running on the target!
-```
-
-**Cause :** Objection 1.12.4 a déprécié les options `-g` et `explore`. La nouvelle syntaxe est `-n` et `start`.
-
-**Tentative de correction :**
-```bash
+# Deuxième tentative (nouvelle syntaxe)
 objection -n owasp.mstg.uncrackable1 start
-# → Même erreur : Frida server or gadget is not running on the target!
+# → Frida server or gadget is not running on the target!
 ```
 
----
+### Erreur 2 — Incompatibilité fondamentale Objection 1.12.4 / Frida 17.x
 
-### Erreur 2 — Incompatibilité de version Objection / Frida
+![frida-ps fonctionne mais Objection échoue](swappy-20260524-160005.png)
 
-![Erreur 2 — Objection help + Frida version](lab16_err2_objection_help_frida_version.png)
+`frida-ps -Uai` liste tous les processus correctement — **frida-server tourne bien**. Le problème est qu'Objection 1.12.4 utilise une API Frida incompatible avec la version 17.x.
 
-**Diagnostic :**
+**Cause racine :** Objection 1.12.4 (dernière version, abandonnée en 2023) n'est compatible qu'avec Frida ≤ 16.x. Frida 17.x a introduit des changements d'API qui cassent Objection.
+
+### Erreur 3 — Tentatives de downgrade Frida
+
 ```bash
-objection --help    # → Objection 1.12.4
-frida --version     # → 17.9.10
-```
-
-**Cause racine identifiée :** Objection 1.12.4 est la **dernière version publiée** mais elle n'est compatible qu'avec Frida ≤ 16.x. Frida 17.x a introduit des changements d'API incompatibles avec Objection.
-
-Le message `Frida server or gadget is not running` n'est pas une erreur de connectivité — c'est Objection qui ne peut pas communiquer avec frida-server 17.x à cause de l'incompatibilité d'API.
-
-**Preuve que frida-server tourne bien :**
-
-![frida-ps fonctionne](lab16_err3_frida_ps_before.png)
-
-`frida-ps -Uai` liste correctement tous les processus — frida-server 17.9.10 est bien actif et accessible par le client Frida système.
-
----
-
-### Erreur 3 — Tentative de downgrade Frida dans le venv Objection
-
-**Tentative :**
-```bash
+# Tentative 1 — version inexistante
 pipx inject objection "frida==16.5.0" "frida-tools==12.5.1" --force
-```
+# → ERROR: No matching distribution found for frida==16.5.0
 
-**Erreur :**
-```
-ERROR: Could not find a version that satisfies the requirement frida==16.5.0
-ERROR: No matching distribution found for frida==16.5.0
-```
-
-**Cause :** `frida==16.5.0` n'existe pas sur PyPI (il y a 16.5.1 mais pas 16.5.0).
-
-**Deuxième tentative avec 16.7.19 :**
-```bash
+# Tentative 2 — version existante
 pipx inject objection "frida==16.7.19" "frida-tools==12.5.1" --force
-# → Injection réussie dans le venv
+# → ✓ Injection réussie dans le venv pipx
 ```
 
-Vérification de la version dans le venv Objection :
+Vérification dans le venv :
 ```bash
 ~/.local/share/pipx/venvs/objection/bin/python -c "import frida; print(frida.__version__)"
 # → 16.7.19 ✓
 ```
 
----
+### Erreur 4 — frida-server 16.7.19 incompatible avec l'AVD
 
-### Erreur 4 — frida-server 16.7.19 incompatible avec l'émulateur
-
-**Tentative de remplacement du frida-server :**
 ```bash
 wget https://github.com/frida/frida/releases/download/16.7.19/frida-server-16.7.19-android-x86_64.xz
 xz -d frida-server-16.7.19-android-x86_64.xz
@@ -248,51 +253,44 @@ adb shell /data/local/tmp/frida-server &
 
 **Erreur :**
 ```
-CANNOT LINK EXECUTABLE "/data/local/tmp/frida-server": 
-empty/missing DT_HASH/DT_GNU_HASH in "/data/local/tmp/frida-server" 
+CANNOT LINK EXECUTABLE "/data/local/tmp/frida-server":
+empty/missing DT_HASH/DT_GNU_HASH in "/data/local/tmp/frida-server"
 (new hash type from the future?)
 ```
 
-**Cause :** Le binaire frida-server 16.7.19 utilise un format ELF avec des entrées DT (dynamic table) inconnues du linker Android de cet émulateur. Le binaire 17.9.10 original fonctionnait sans ce problème car il était compilé différemment.
+**Cause :** Le binaire frida-server 16.7.19 utilise des entrées ELF DT (dynamic table) non reconnues par le linker Android de cet émulateur. Le binaire 17.9.10 original n'avait pas ce problème.
 
 **Tableau récapitulatif des incompatibilités :**
 
 | Composant | Version | Statut |
 |---|---|---|
-| Objection (hôte) | 1.12.4 | ✅ Installé |
+| Objection (hôte, pipx) | 1.12.4 | ✅ Installé |
 | Frida client système (hôte) | 17.9.10 | ✅ Fonctionne |
-| Frida dans venv Objection | 16.7.19 | ✅ Installé |
+| Frida dans venv Objection | 16.7.19 | ✅ Injecté |
 | frida-server 17.9.10 (émulateur) | 17.9.10 | ✅ Tourne |
 | frida-server 16.7.19 (émulateur) | 16.7.19 | ❌ CANNOT LINK |
-| Objection → frida-server 17.x | — | ❌ API incompatible |
-| Objection → frida-server 16.x | — | ❌ Binaire refusé par le linker |
-
-**Conclusion :** Aucune combinaison viable n'a pu être trouvée pour faire fonctionner Objection 1.12.4 avec cet émulateur Android sous Frida 17.x.
+| Objection ↔ frida-server 17.x | — | ❌ API incompatible |
+| Objection ↔ frida-server 16.x | — | ❌ Binaire refusé linker |
 
 ---
 
 ## 9. Solution de contournement — Frida JS direct
 
-![Restauration frida-server 17.9.10](lab16_fix1_restore_frida_server.png)
+![Restauration frida-server 17.9.10](swappy-20260524-161201.png)
 
 Restauration de l'environnement fonctionnel :
 
 ```bash
-# Tuer le frida-server 16.x échoué
 adb shell pkill frida-server 2>/dev/null
-
-# Remettre le frida-server 17.9.10 original
 adb push ~/secappmobile/inspector/frida-server /data/local/tmp/frida-server
 adb shell chmod 755 /data/local/tmp/frida-server
 adb shell /data/local/tmp/frida-server &
-
-# Vérifier — tous les processus visibles
-frida-ps -Uai
+frida-ps -Uai   # confirme que tout est OK
 ```
 
-![Bypass SSL réussi avec le script JS](lab16_fix2_bypass_success.png)
+![Bypass SSL réussi via script JS](swappy-20260524-161220.png)
 
-Lancement du bypass via le script JavaScript universel (équivalent fonctionnel de `android sslpinning disable`) :
+Lancement du bypass via le script JavaScript universel :
 
 ```bash
 cd ~/secappmobile/inspector
@@ -307,9 +305,9 @@ frida -U -f owasp.mstg.uncrackable1 -l sslpin_bypass_universal.js
 [+] Universal SSL pinning bypass installed
 ```
 
-**Ce que fait `android sslpinning disable` d'Objection en interne** — exactement les mêmes hooks :
+Ce script est l'**équivalent fonctionnel exact** de `android sslpinning disable` d'Objection :
 
-| Hook Objection interne | Équivalent dans le script JS |
+| Hook Objection interne | Hook dans sslpin_bypass_universal.js |
 |---|---|
 | Patch `X509TrustManager` | `checkServerTrusted` → `return null` |
 | Patch Conscrypt | `TrustManagerImpl.checkTrusted` → allow |
@@ -317,62 +315,68 @@ frida -U -f owasp.mstg.uncrackable1 -l sslpin_bypass_universal.js
 | Patch WebView | `onReceivedSslError` → `proceed()` |
 | Inject TrustManager permissif | `SSLContext.init` → TrustManager vide |
 
+![Bypass SSL également validé en Lab 15](swappy-20260524-153548.png)
+
+Ce même bypass avait déjà été validé lors du Lab 15 — les trois hooks principaux confirmés.
+
 ---
 
 ## 10. Note : Objection avec venv Python dédié
 
-Une alternative non testée qui pourrait résoudre le problème de compatibilité consiste à créer un environnement Python entièrement dédié avec une version de Frida compatible :
+Une alternative non testée qui **pourrait** résoudre le problème de compatibilité :
 
 ```bash
-# Créer un venv isolé avec Python 3.11 (plus compatible avec Frida 16.x)
+# Créer un venv isolé avec Python 3.11
 python3.11 -m venv ~/venv-objection
 source ~/venv-objection/bin/activate
 
 # Installer des versions compatibles
 pip install frida==16.7.19 frida-tools objection
 
-# Vérifier
-objection version
-frida --version   # doit afficher 16.7.19
+# Vérifier les versions
+objection version   # doit afficher 1.12.4
+frida --version     # doit afficher 16.7.19
 
-# Puis utiliser avec un frida-server 16.7.19 fonctionnel
+# Lancer avec ce venv actif
 objection -n owasp.mstg.uncrackable1 start
 ```
 
-> **Prérequis bloquant :** Cette approche nécessite toujours un `frida-server` 16.x qui tourne sur l'émulateur, ce qui a échoué avec l'erreur `CANNOT LINK EXECUTABLE` sur cet AVD spécifique. Elle pourrait fonctionner sur un appareil physique rooté ou un AVD avec une version d'Android différente.
+> **Prérequis bloquant :** Cette approche nécessite un `frida-server` 16.x fonctionnel sur l'émulateur, ce qui a échoué avec `CANNOT LINK EXECUTABLE` sur cet AVD spécifique. Pourrait fonctionner sur un **appareil physique rooté** ou un AVD avec une version d'Android plus ancienne.
 
 ---
 
 ## 11. Conclusion
 
 ### Ce qui a fonctionné ✅
-- Installation d'Objection 1.12.4 via pipx
-- Identification précise des incompatibilités de version
-- Bypass SSL pinning via script Frida JS (équivalent fonctionnel complet)
-- Infrastructure ZAP + CA système + proxy pleinement opérationnelle
+- Installation d'Objection 1.12.4 via pipx sur Arch Linux
+- Identification précise de toutes les incompatibilités de version
+- Bypass SSL pinning opérationnel via script Frida JS (équivalent fonctionnel complet)
+- Infrastructure ZAP + CA système + proxy pleinement fonctionnelle
 
 ### Ce qui a échoué ❌
 - Objection 1.12.4 incompatible avec Frida 17.x (API modifiée)
-- frida-server 16.7.19 refusé par le linker de l'émulateur (`DT_HASH` manquant)
+- `frida==16.5.0` inexistant sur PyPI
+- frida-server 16.7.19 rejeté par le linker de l'AVD (`DT_HASH` manquant)
 - Aucune combinaison Objection/frida-server viable sur cet AVD
 
 ### Leçon apprise
-Objection est un outil **abandonné** (dernière mise à jour : 2023, dernière version : 1.12.4). Pour des labs pratiques en 2025/2026, le script Frida JS direct est plus fiable, plus transparent, et offre un contrôle plus fin. Les deux approches produisent **le même résultat de sécurité**.
+
+Objection est un projet **abandonné** (dernière version 1.12.4, 2023). Pour des labs en 2025/2026, le script Frida JS direct est plus fiable, plus transparent, et offre un contrôle plus fin. Les deux approches produisent le **même résultat de sécurité**.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                  Résumé de l'infrastructure              │
+│                  Infrastructure finale                   │
 │                                                         │
 │  Arch Linux (hôte)                                      │
-│  ├── Frida 17.9.10 (client)                             │
-│  ├── Objection 1.12.4 (❌ incompatible avec Frida 17.x) │
-│  └── ZAP proxy → localhost:8080                         │
-│                          ↕ ADB USB                      │
+│  ├── Frida 17.9.10 (client) ✅                          │
+│  ├── Objection 1.12.4 ❌ (incompatible Frida 17.x)      │
+│  └── ZAP proxy → localhost:8080 ✅                      │
+│                    ↕ ADB USB                            │
 │  Émulateur AVD x86_64                                   │
 │  ├── frida-server 17.9.10 ✅                            │
-│  ├── CA ZAP installée (système) ✅                      │
+│  ├── CA ZAP système (44351ca1.0) ✅                     │
 │  ├── Proxy → 10.0.2.2:8080 ✅                           │
-│  └── App cible : owasp.mstg.uncrackable1                │
-│      └── SSL bypass actif via script JS ✅              │
+│  └── owasp.mstg.uncrackable1                            │
+│      └── SSL bypass via script JS ✅                    │
 └─────────────────────────────────────────────────────────┘
 ```
